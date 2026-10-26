@@ -2,6 +2,8 @@ package page
 
 import (
 	"context"
+	"errors"
+	"github.com/port-labs/terraform-provider-port-labs/v2/internal/consts"
 
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
@@ -116,7 +118,8 @@ func (r *PageResource) Create(ctx context.Context, req resource.CreateRequest, r
 		return
 	}
 
-	if state.Type.ValueString() == "entity" {
+	switch state.Type.ValueString() {
+	case "entity":
 		_, statusCode, err := r.portClient.GetPage(ctx, state.Identifier.ValueString())
 		if err != nil {
 			if statusCode == 404 {
@@ -129,34 +132,26 @@ func (r *PageResource) Create(ctx context.Context, req resource.CreateRequest, r
 			resp.Diagnostics.AddError("failed to get page", err.Error())
 			return
 		}
-
-		page, err := PageToPortBody(state)
-		if err != nil {
-			resp.Diagnostics.AddError("failed to convert page resource to body", err.Error())
-			return
-		}
-
-		p, err := r.portClient.UpdatePage(ctx, page.Identifier, page)
-		if err != nil {
-			resp.Diagnostics.AddError("failed to update page", err.Error())
-			return
-		}
-
-		updatedPage, _, err := r.portClient.GetPage(ctx, state.Identifier.ValueString())
-		if err != nil {
-			resp.Diagnostics.AddError("failed to get updated page", err.Error())
-			return
-		}
-
-		state.ID = types.StringValue(p.Identifier)
-		state.CreatedAt = types.StringValue(updatedPage.CreatedAt.String())
-		state.CreatedBy = types.StringValue(updatedPage.CreatedBy)
-		state.UpdatedAt = types.StringValue(updatedPage.UpdatedAt.String())
-		state.UpdatedBy = types.StringValue(updatedPage.UpdatedBy)
-		state.Description = types.StringPointerValue(updatedPage.Description)
-
-		resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
+		r.adoptExistingPage(ctx, state, resp)
 		return
+	default:
+		// the page may have been created outside Terraform, e.g. the catalog page Port creates alongside
+		// a blueprint, and is only taken over when explicitly allowed
+		_, statusCode, err := r.portClient.GetPage(ctx, state.Identifier.ValueString())
+		if err == nil {
+			if !r.portClient.AdoptExisting(consts.ResourceKindPage, state.AdoptExisting) {
+				existsErr := &cli.ResourceExistsError{ResourceKind: consts.ResourceKindPage, Identifier: state.Identifier.ValueString()}
+				resp.Diagnostics.AddError(existsErr.Summary(), existsErr.Error())
+				return
+			}
+			tflog.Info(ctx, "page already exists, adopting it into state", map[string]interface{}{"identifier": state.Identifier.ValueString()})
+			r.adoptExistingPage(ctx, state, resp)
+			return
+		}
+		if statusCode != 404 {
+			resp.Diagnostics.AddError("failed to get page", err.Error())
+			return
+		}
 	}
 
 	page, err := PageToPortBody(state)
@@ -166,6 +161,18 @@ func (r *PageResource) Create(ctx context.Context, req resource.CreateRequest, r
 	}
 
 	p, err := r.portClient.CreatePage(ctx, page)
+	var takenErr *cli.IdentifierTakenError
+	if errors.As(err, &takenErr) {
+		// Port creates a blueprint's catalog page asynchronously, so it can appear after the check above
+		if !r.portClient.AdoptExisting(consts.ResourceKindPage, state.AdoptExisting) {
+			existsErr := &cli.ResourceExistsError{ResourceKind: consts.ResourceKindPage, Identifier: state.Identifier.ValueString()}
+			resp.Diagnostics.AddError(existsErr.Summary(), existsErr.Error())
+			return
+		}
+		tflog.Info(ctx, "page was created concurrently, adopting it into state", map[string]interface{}{"identifier": state.Identifier.ValueString()})
+		r.adoptExistingPage(ctx, state, resp)
+		return
+	}
 	if err != nil {
 		resp.Diagnostics.AddError("failed to create page", err.Error())
 		return
@@ -186,6 +193,36 @@ func (r *PageResource) Create(ctx context.Context, req resource.CreateRequest, r
 	state.UpdatedAt = types.StringValue(p.UpdatedAt.String())
 	state.UpdatedBy = types.StringValue(p.UpdatedBy)
 	state.Description = types.StringPointerValue(p.Description)
+
+	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
+}
+
+// adoptExistingPage takes ownership of a page that already exists in Port by updating it to match the plan
+func (r *PageResource) adoptExistingPage(ctx context.Context, state *PageModel, resp *resource.CreateResponse) {
+	page, err := PageToPortBody(state)
+	if err != nil {
+		resp.Diagnostics.AddError("failed to convert page resource to body", err.Error())
+		return
+	}
+
+	p, err := r.portClient.UpdatePage(ctx, page.Identifier, page)
+	if err != nil {
+		resp.Diagnostics.AddError("failed to update page", err.Error())
+		return
+	}
+
+	updatedPage, _, err := r.portClient.GetPage(ctx, state.Identifier.ValueString())
+	if err != nil {
+		resp.Diagnostics.AddError("failed to get updated page", err.Error())
+		return
+	}
+
+	state.ID = types.StringValue(p.Identifier)
+	state.CreatedAt = types.StringValue(updatedPage.CreatedAt.String())
+	state.CreatedBy = types.StringValue(updatedPage.CreatedBy)
+	state.UpdatedAt = types.StringValue(updatedPage.UpdatedAt.String())
+	state.UpdatedBy = types.StringValue(updatedPage.UpdatedBy)
+	state.Description = types.StringPointerValue(updatedPage.Description)
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 }

@@ -99,6 +99,10 @@ func PageSchema() map[string]schema.Attribute {
 			MarkdownDescription: "The page description",
 			Optional:            true,
 		},
+		"adopt_existing": schema.BoolAttribute{
+			MarkdownDescription: "Whether to take ownership of a page with the same identifier that already exists in Port, such as the catalog page Port creates alongside a blueprint, instead of failing. Only used on creation. When not set, it is allowed only if `port_page` is listed in the provider's `adopt_existing_resources`. If the page already exists when planning, the plan shows a warning that it will be taken over",
+			Optional:            true,
+		},
 	}
 }
 

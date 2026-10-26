@@ -20,4 +20,5 @@ type PageModel struct {
 	UpdatedAt         types.String `tfsdk:"updated_at"`
 	UpdatedBy         types.String `tfsdk:"updated_by"`
 	Description       types.String `tfsdk:"description"`
+	AdoptExisting     types.Bool   `tfsdk:"adopt_existing"`
 }

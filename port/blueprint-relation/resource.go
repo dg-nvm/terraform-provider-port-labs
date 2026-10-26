@@ -3,11 +3,13 @@ package blueprint_relation
 import (
 	"context"
 	"fmt"
+	"github.com/port-labs/terraform-provider-port-labs/v2/internal/consts"
 	"strings"
 
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/types"
+	"github.com/hashicorp/terraform-plugin-log/tflog"
 	"github.com/port-labs/terraform-provider-port-labs/v2/internal/cli"
 	"github.com/port-labs/terraform-provider-port-labs/v2/internal/flex"
 )
@@ -135,14 +137,15 @@ func (r *BlueprintRelationResource) Create(ctx context.Context, req resource.Cre
 		return
 	}
 
+	// relations created outside Terraform (e.g. by an integration's default resources) are only
+	// taken over when explicitly allowed
 	if _, ok := b.Relations[relationIdentifier]; ok {
-		resp.Diagnostics.AddError(
-			"relation already exists",
-			fmt.Sprintf("Relation %q already exists on blueprint %q. Remove it from the blueprint's relations block, "+
-				"or import it with `terraform import <address> %q`.",
-				relationIdentifier, blueprintIdentifier, resourceId(blueprintIdentifier, relationIdentifier)),
-		)
-		return
+		if !r.portClient.AdoptExisting(consts.ResourceKindBlueprintRelation, state.AdoptExisting) {
+			existsErr := &cli.ResourceExistsError{ResourceKind: consts.ResourceKindBlueprintRelation, Identifier: relationIdentifier, Blueprint: blueprintIdentifier}
+			resp.Diagnostics.AddError(existsErr.Summary(), existsErr.Error())
+			return
+		}
+		tflog.Info(ctx, "relation already exists, adopting it into state", map[string]interface{}{"blueprint": blueprintIdentifier, "identifier": relationIdentifier})
 	}
 
 	if _, err := r.portClient.PatchBlueprintRelation(ctx, blueprintIdentifier, relationIdentifier, relationToPortBody(state)); err != nil {

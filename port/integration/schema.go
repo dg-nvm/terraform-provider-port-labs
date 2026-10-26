@@ -59,6 +59,10 @@ func IntegrationSchema() map[string]schema.Attribute {
 				stringplanmodifier.UseStateForUnknown(),
 			},
 		},
+		"adopt_existing": schema.BoolAttribute{
+			MarkdownDescription: "Whether to take ownership of an integration with the same `installation_id` that already exists in Port, such as a self-hosted integration that registered itself or one installed from the Port UI, instead of failing. Only used on creation. When not set, it is allowed only if `port_integration` is listed in the provider's `adopt_existing_resources`. The existing integration must have the same `installation_type` and `installation_app_type`, since they cannot be changed. If the integration already exists when planning, the plan shows a warning that it will be taken over",
+			Optional:            true,
+		},
 		"create_port_resources_origin": schema.StringAttribute{
 			MarkdownDescription: "Controls whether Port creates default blueprints and mappings when the integration is created. Use `Empty` to skip default resource creation. Use `Port` to create default resources via Port. If omitted, default resources are created. Can only be set on creation.",
 			Optional:            true,

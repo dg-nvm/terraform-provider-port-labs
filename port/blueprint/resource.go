@@ -2,6 +2,7 @@ package blueprint
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -160,7 +161,12 @@ func (r *BlueprintResource) Create(ctx context.Context, req resource.CreateReque
 		return
 	}
 
-	bp, err := r.portClient.CreateBlueprint(ctx, b, createCatalogPage)
+	bp, err := r.createOrAdoptBlueprint(ctx, b, createCatalogPage, r.portClient.AdoptExisting(consts.ResourceKindBlueprint, state.AdoptExisting))
+	var existsErr *cli.ResourceExistsError
+	if errors.As(err, &existsErr) {
+		resp.Diagnostics.AddError(existsErr.Summary(), existsErr.Error())
+		return
+	}
 	if err != nil {
 		resp.Diagnostics.AddError("failed to create blueprint", err.Error())
 		return
@@ -170,6 +176,28 @@ func (r *BlueprintResource) Create(ctx context.Context, req resource.CreateReque
 
 	resp.Diagnostics.Append(setManagedRelationsFromState(ctx, resp.Private, state)...)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
+}
+
+// createOrAdoptBlueprint creates the blueprint. When it was already created outside Terraform (e.g. by an
+// integration's default resources), it fails unless adoptExisting is set, in which case it takes ownership.
+// Relations and aggregation properties on the existing blueprint are kept, since they may be managed by
+// other resources.
+func (r *BlueprintResource) createOrAdoptBlueprint(ctx context.Context, b *cli.Blueprint, createCatalogPage *bool, adoptExisting bool) (*cli.Blueprint, error) {
+	existingBp, statusCode, err := r.portClient.ReadBlueprint(ctx, b.Identifier)
+	if err != nil {
+		if statusCode == 404 {
+			return r.portClient.CreateBlueprint(ctx, b, createCatalogPage)
+		}
+		return nil, err
+	}
+	if !adoptExisting {
+		return nil, &cli.ResourceExistsError{ResourceKind: consts.ResourceKindBlueprint, Identifier: b.Identifier}
+	}
+
+	tflog.Info(ctx, "blueprint already exists, adopting it into state", map[string]interface{}{"identifier": b.Identifier})
+	b.AggregationProperties = existingBp.AggregationProperties
+	b.Relations = mergeUnmanagedRelations(b.Relations, nil, existingBp.Relations)
+	return r.portClient.UpdateBlueprint(ctx, b, b.Identifier)
 }
 
 func writeBlueprintComputedFieldsToState(state *BlueprintModel, bp *cli.Blueprint) {

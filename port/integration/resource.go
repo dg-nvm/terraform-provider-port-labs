@@ -61,6 +61,16 @@ func (r *IntegrationResource) Create(ctx context.Context, req resource.CreateReq
 		return
 	}
 
+	existing, statusCode, err := r.portClient.GetIntegration(ctx, plan.InstallationId.ValueString())
+	if err == nil {
+		r.adoptIntegration(ctx, plan, existing, resp)
+		return
+	}
+	if statusCode != 404 {
+		resp.Diagnostics.AddError("failed to check whether the integration already exists", err.Error())
+		return
+	}
+
 	body, err := integrationToPortBody(plan, true)
 	if err != nil {
 		resp.Diagnostics.AddError("failed to build request body", err.Error())
