@@ -74,12 +74,21 @@ func (f *FakePort) AddIntegration(installationId string, integration map[string]
 
 // PageAppearsOnCreate makes the page exist only once something tries to create it, so the create conflicts
 func (f *FakePort) PageAppearsOnCreate(identifier string, page map[string]any) {
+	f.appearOnCreateIn(pages, identifier, page)
+}
+
+// BlueprintAppearsOnCreate makes the blueprint exist only once something tries to create it, so the create conflicts
+func (f *FakePort) BlueprintAppearsOnCreate(identifier string, blueprint map[string]any) {
+	f.appearOnCreateIn(blueprints, identifier, blueprint)
+}
+
+func (f *FakePort) appearOnCreateIn(c collection, identifier string, object map[string]any) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if f.appearOnCreate[pages.path] == nil {
-		f.appearOnCreate[pages.path] = map[string]map[string]any{}
+	if f.appearOnCreate[c.path] == nil {
+		f.appearOnCreate[c.path] = map[string]map[string]any{}
 	}
-	f.appearOnCreate[pages.path][identifier] = page
+	f.appearOnCreate[c.path][identifier] = object
 }
 
 func (f *FakePort) Blueprint(identifier string) map[string]any {
@@ -269,10 +278,10 @@ func WarningSummaries(diags diag.Diagnostics) []string {
 
 // State returns a state holding the same values as plan, as for a resource that already exists
 func State(plan tfsdk.Plan) tfsdk.State {
-	return tfsdk.State{Schema: plan.Schema, Raw: plan.Raw}
+	return tfsdk.State(plan)
 }
 
 // Config returns a configuration holding the same values as plan
 func Config(plan tfsdk.Plan) tfsdk.Config {
-	return tfsdk.Config{Schema: plan.Schema, Raw: plan.Raw}
+	return tfsdk.Config(plan)
 }

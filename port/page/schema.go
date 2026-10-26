@@ -30,7 +30,7 @@ func PageSchema() map[string]schema.Attribute {
 					"blueprint-entities",
 					"dashboard",
 					"home",
-					"entity",
+					entityPageType,
 				),
 			},
 		},

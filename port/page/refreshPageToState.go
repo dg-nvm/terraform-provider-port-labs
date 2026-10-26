@@ -24,7 +24,7 @@ func (r *PageResource) refreshPageToState(pm *PageModel, b *cli.Page) error {
 	pm.Description = types.StringPointerValue(b.Description)
 
 	// Port stores a page declared without widgets as having none; keep it undeclared rather than diffing [] against null
-	if b.Widgets != nil && !(len(*b.Widgets) == 0 && oldWidgets.IsNull()) {
+	if b.Widgets != nil && (len(*b.Widgets) != 0 || !oldWidgets.IsNull()) {
 		widgetAttrs := make([]attr.Value, len(*b.Widgets))
 		for i, widget := range *b.Widgets {
 			bWidget, err := utils.GoObjectToTerraformStringPreferExisting(

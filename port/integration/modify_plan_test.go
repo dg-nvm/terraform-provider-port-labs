@@ -1,7 +1,6 @@
 package integration
 
 import (
-	"github.com/hashicorp/terraform-plugin-framework/attr"
 	"testing"
 
 	"github.com/hashicorp/terraform-plugin-framework/types"
@@ -50,38 +49,4 @@ func TestExtractAppSpec(t *testing.T) {
 	assert.True(t, extractAppSpec(types.StringValue(`{"integrationSpec":{"token":"x"}}`)).IsNull())
 	assert.True(t, extractAppSpec(types.StringNull()).IsNull())
 	assert.True(t, extractAppSpec(types.StringUnknown()).IsUnknown())
-}
-
-func TestKeepUnconfiguredChangelogDestinations(t *testing.T) {
-	webhookType := map[string]attr.Type{"url": types.StringType, "agent": types.BoolType}
-	webhook := types.ObjectValueMust(webhookType, map[string]attr.Value{
-		"url":   types.StringValue("https://example.com"),
-		"agent": types.BoolValue(false),
-	})
-	otherWebhook := types.ObjectValueMust(webhookType, map[string]attr.Value{
-		"url":   types.StringValue("https://other.example.com"),
-		"agent": types.BoolValue(false),
-	})
-	kafkaNull := types.ObjectNull(map[string]attr.Type{})
-
-	t.Run("unset destinations keep state instead of showing as unknown", func(t *testing.T) {
-		plan := &IntegrationModel{KafkaChangelogDestination: types.ObjectUnknown(map[string]attr.Type{}), WebhookChangelogDestination: types.ObjectUnknown(webhookType)}
-		config := &IntegrationModel{KafkaChangelogDestination: kafkaNull, WebhookChangelogDestination: types.ObjectNull(webhookType)}
-		state := &IntegrationModel{KafkaChangelogDestination: kafkaNull, WebhookChangelogDestination: webhook}
-
-		keepUnconfiguredChangelogDestinations(plan, config, state)
-
-		assert.True(t, plan.KafkaChangelogDestination.IsNull())
-		assert.True(t, plan.WebhookChangelogDestination.Equal(webhook))
-	})
-
-	t.Run("configured destination is planned as configured", func(t *testing.T) {
-		plan := &IntegrationModel{KafkaChangelogDestination: kafkaNull, WebhookChangelogDestination: otherWebhook}
-		config := &IntegrationModel{KafkaChangelogDestination: kafkaNull, WebhookChangelogDestination: otherWebhook}
-		state := &IntegrationModel{KafkaChangelogDestination: kafkaNull, WebhookChangelogDestination: webhook}
-
-		keepUnconfiguredChangelogDestinations(plan, config, state)
-
-		assert.True(t, plan.WebhookChangelogDestination.Equal(otherWebhook))
-	})
 }

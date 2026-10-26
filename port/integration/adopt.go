@@ -2,12 +2,12 @@ package integration
 
 import (
 	"context"
-	"fmt"
+	"net/http"
 
 	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
-	"github.com/hashicorp/terraform-plugin-log/tflog"
+	"github.com/port-labs/terraform-provider-port-labs/v2/internal/adoption"
 	"github.com/port-labs/terraform-provider-port-labs/v2/internal/cli"
 	"github.com/port-labs/terraform-provider-port-labs/v2/internal/consts"
 )
@@ -54,44 +54,32 @@ func (r *IntegrationResource) checkExistingAtPlan(ctx context.Context, plan *Int
 
 	existing, statusCode, err := r.portClient.GetIntegration(ctx, plan.InstallationId.ValueString())
 	if err != nil {
-		if statusCode != 404 {
+		if statusCode != http.StatusNotFound {
 			diags.AddWarning("failed to check whether the integration already exists", err.Error())
 		}
 		return
 	}
 
-	if !r.portClient.AdoptExisting(consts.ResourceKindIntegration, plan.AdoptExisting) {
-		existsErr := &cli.ResourceExistsError{ResourceKind: consts.ResourceKindIntegration, Identifier: plan.InstallationId.ValueString()}
-		diags.AddAttributeError(path.Root("installation_id"), existsErr.Summary(), existsErr.Error())
+	if !adoption.TakeOver(adoption.AtPlan, r.portClient, existingIntegration(plan), plan.AdoptExisting, adoptionConflict(plan, existing), diags) {
 		return
 	}
-	if conflictErr := adoptionConflict(plan, existing); conflictErr != nil {
-		diags.AddAttributeError(path.Root(conflictErr.Field), conflictErr.Summary(), conflictErr.Error())
-		return
-	}
-
-	diags.AddAttributeWarning(path.Root("adopt_existing"), "integration will be taken over",
-		fmt.Sprintf("Integration %q already exists in Port. Applying will take ownership of it and overwrite it to match the configuration.", plan.InstallationId.ValueString()))
 	if isKnown(plan.CreatePortResourcesOrigin) {
 		diags.AddAttributeWarning(path.Root("create_port_resources_origin"), "create_port_resources_origin is ignored",
 			"`create_port_resources_origin` only applies when an integration is created. The existing integration keeps the resources it already created.")
 	}
 }
 
+func existingIntegration(plan *IntegrationModel) *cli.ResourceExistsError {
+	return &cli.ResourceExistsError{ResourceKind: consts.ResourceKindIntegration, Identifier: plan.InstallationId.ValueString()}
+}
+
 // adoptIntegration takes ownership of an integration that already exists in Port by updating it to match the plan
 func (r *IntegrationResource) adoptIntegration(ctx context.Context, plan *IntegrationModel, existing *cli.Integration, resp *resource.CreateResponse) {
 	installationId := plan.InstallationId.ValueString()
-	if !r.portClient.AdoptExisting(consts.ResourceKindIntegration, plan.AdoptExisting) {
-		existsErr := &cli.ResourceExistsError{ResourceKind: consts.ResourceKindIntegration, Identifier: installationId}
-		resp.Diagnostics.AddError(existsErr.Summary(), existsErr.Error())
-		return
-	}
-	if conflictErr := adoptionConflict(plan, existing); conflictErr != nil {
-		resp.Diagnostics.AddError(conflictErr.Summary(), conflictErr.Error())
+	if !adoption.TakeOver(adoption.AtApply, r.portClient, existingIntegration(plan), plan.AdoptExisting, adoptionConflict(plan, existing), &resp.Diagnostics) {
 		return
 	}
 
-	tflog.Info(ctx, "integration already exists, adopting it into state", map[string]interface{}{"installation_id": installationId})
 	body, err := integrationToPortBody(plan, false)
 	if err != nil {
 		resp.Diagnostics.AddError("failed to build request body", err.Error())

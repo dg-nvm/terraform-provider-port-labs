@@ -2,13 +2,14 @@ package blueprint_relation
 
 import (
 	"context"
-	"fmt"
-	"github.com/port-labs/terraform-provider-port-labs/v2/internal/cli"
-	"github.com/port-labs/terraform-provider-port-labs/v2/internal/consts"
+	"net/http"
 
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/types"
+	"github.com/port-labs/terraform-provider-port-labs/v2/internal/adoption"
+	"github.com/port-labs/terraform-provider-port-labs/v2/internal/cli"
+	"github.com/port-labs/terraform-provider-port-labs/v2/internal/consts"
 )
 
 var _ resource.ResourceWithModifyPlan = &BlueprintRelationResource{}
@@ -31,7 +32,7 @@ func (r *BlueprintRelationResource) ModifyPlan(ctx context.Context, req resource
 
 	b, statusCode, err := r.portClient.ReadBlueprint(ctx, blueprintIdentifier.ValueString())
 	if err != nil {
-		if statusCode != 404 {
+		if statusCode != http.StatusNotFound {
 			resp.Diagnostics.AddWarning("failed to check whether the relation already exists", err.Error())
 		}
 		return
@@ -40,16 +41,14 @@ func (r *BlueprintRelationResource) ModifyPlan(ctx context.Context, req resource
 		return
 	}
 
-	if r.portClient.AdoptExisting(consts.ResourceKindBlueprintRelation, adoptExisting) {
-		resp.Diagnostics.AddAttributeWarning(path.Root("adopt_existing"), "relation will be taken over",
-			fmt.Sprintf("Relation %q already exists on blueprint %q. Applying will take ownership of it and overwrite it to match the configuration.",
-				relationIdentifier.ValueString(), blueprintIdentifier.ValueString()))
-		return
-	}
-	existsErr := &cli.ResourceExistsError{
+	adoption.TakeOver(adoption.AtPlan, r.portClient, existingRelation(blueprintIdentifier.ValueString(), relationIdentifier.ValueString()),
+		adoptExisting, nil, &resp.Diagnostics)
+}
+
+func existingRelation(blueprintIdentifier, relationIdentifier string) *cli.ResourceExistsError {
+	return &cli.ResourceExistsError{
 		ResourceKind: consts.ResourceKindBlueprintRelation,
-		Identifier:   relationIdentifier.ValueString(),
-		Blueprint:    blueprintIdentifier.ValueString(),
+		Identifier:   relationIdentifier,
+		Blueprint:    blueprintIdentifier,
 	}
-	resp.Diagnostics.AddAttributeError(path.Root("identifier"), existsErr.Summary(), existsErr.Error())
 }

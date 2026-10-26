@@ -4,9 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/hashicorp/terraform-plugin-framework/attr"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
-	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-go/tftypes"
 	"github.com/port-labs/terraform-provider-port-labs/v2/internal/adopttest"
 	"github.com/port-labs/terraform-provider-port-labs/v2/internal/cli"
@@ -87,6 +85,7 @@ func TestPageCreateAdoption(t *testing.T) {
 				assert.True(t, resp.State.Raw.IsNull())
 			case tc.exists:
 				assert.Empty(t, adopttest.ErrorSummaries(resp.Diagnostics))
+				assert.Equal(t, []string{"page was taken over"}, adopttest.WarningSummaries(resp.Diagnostics), "taking over during apply is reported")
 				assert.Equal(t, []string{"PUT /v1/pages/services"}, fake.Writes())
 			default:
 				assert.Empty(t, adopttest.ErrorSummaries(resp.Diagnostics))
@@ -173,36 +172,36 @@ func TestPageCreateAdoptsCatalogPageCreatedConcurrently(t *testing.T) {
 	}
 }
 
-func TestRefreshPageWidgets(t *testing.T) {
-	widget := map[string]any{"id": "table", "type": "table-entities-explorer"}
-	testCases := []struct {
-		name        string
-		stateNull   bool
-		apiWidgets  *[]map[string]any
-		wantNull    bool
-		wantEntries int
-	}{
-		{name: "no widgets declared and none in Port stays undeclared", stateNull: true, apiWidgets: &[]map[string]any{}, wantNull: true},
-		{name: "no widgets declared but some in Port shows them", stateNull: true, apiWidgets: &[]map[string]any{widget}, wantEntries: 1},
-		{name: "declared widgets removed in Port shows the removal", stateNull: false, apiWidgets: &[]map[string]any{}, wantEntries: 0},
-		{name: "missing widgets field is null", stateNull: false, apiWidgets: nil, wantNull: true},
+
+func TestPageTypeConflictIsNotTakenOver(t *testing.T) {
+	newFake := func(t *testing.T) (*adopttest.FakePort, *PageResource) {
+		fake := adopttest.NewFakePort(t)
+		fake.AddPage("services", map[string]any{"identifier": "services", "type": "dashboard"})
+		return fake, &PageResource{portClient: fake.Client(adopttest.Policy(consts.ResourceKindPage))}
 	}
 
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			r := &PageResource{portClient: &cli.PortClient{}}
-			state := &PageModel{Widgets: types.ListNull(types.StringType)}
-			if !tc.stateNull {
-				state.Widgets = types.ListValueMust(types.StringType, []attr.Value{types.StringValue(`{"id":"table"}`)})
-			}
+	t.Run("at plan", func(t *testing.T) {
+		fake, r := newFake(t)
+		s := adopttest.ResourceSchema(t, r)
+		plan := adopttest.Plan(t, s, pagePlanValues(nil))
 
-			err := r.refreshPageToState(state, &cli.Page{Identifier: "services", Widgets: tc.apiWidgets})
+		resp := &resource.ModifyPlanResponse{Plan: plan}
+		r.ModifyPlan(context.Background(), resource.ModifyPlanRequest{Plan: plan, State: adopttest.NullState(s)}, resp)
 
-			assert.NoError(t, err)
-			assert.Equal(t, tc.wantNull, state.Widgets.IsNull())
-			if !tc.wantNull {
-				assert.Len(t, state.Widgets.Elements(), tc.wantEntries)
-			}
-		})
-	}
+		assert.Equal(t, []string{"cannot take over existing page"}, adopttest.ErrorSummaries(resp.Diagnostics))
+		assert.Contains(t, resp.Diagnostics.Errors()[0].Detail(), "`type` = \"dashboard\", but the configuration sets \"blueprint-entities\"")
+		assert.Empty(t, fake.Writes())
+	})
+
+	t.Run("at apply", func(t *testing.T) {
+		fake, r := newFake(t)
+		s := adopttest.ResourceSchema(t, r)
+		plan := adopttest.Plan(t, s, pagePlanValues(nil))
+
+		resp := &resource.CreateResponse{State: adopttest.NullState(s)}
+		r.Create(context.Background(), resource.CreateRequest{Plan: plan}, resp)
+
+		assert.Equal(t, []string{"cannot take over existing page"}, adopttest.ErrorSummaries(resp.Diagnostics))
+		assert.Empty(t, fake.Writes(), "a page of another type must not be overwritten")
+	})
 }

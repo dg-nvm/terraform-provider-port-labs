@@ -111,6 +111,7 @@ func TestIntegrationCreateAdoption(t *testing.T) {
 				assert.True(t, resp.State.Raw.IsNull())
 			case tc.exists:
 				assert.Empty(t, adopttest.ErrorSummaries(resp.Diagnostics))
+				assert.Equal(t, []string{"integration was taken over"}, adopttest.WarningSummaries(resp.Diagnostics), "taking over during apply is reported")
 				assert.Equal(t, []string{"PATCH /v1/integration/my-gitlab"}, fake.Writes())
 				assert.False(t, resp.State.Raw.IsNull())
 			default:

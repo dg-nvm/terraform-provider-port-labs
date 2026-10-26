@@ -3,6 +3,7 @@ package integration
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"sync"
 
 	"github.com/hashicorp/terraform-plugin-framework/diag"
@@ -66,7 +67,7 @@ func (r *IntegrationResource) Create(ctx context.Context, req resource.CreateReq
 		r.adoptIntegration(ctx, plan, existing, resp)
 		return
 	}
-	if statusCode != 404 {
+	if statusCode != http.StatusNotFound {
 		resp.Diagnostics.AddError("failed to check whether the integration already exists", err.Error())
 		return
 	}
@@ -106,7 +107,7 @@ func (r *IntegrationResource) Read(ctx context.Context, req resource.ReadRequest
 
 	a, statusCode, err := r.portClient.GetIntegration(ctx, integrationIdentifier)
 	if err != nil {
-		if statusCode == 404 {
+		if statusCode == http.StatusNotFound {
 			resp.State.RemoveResource(ctx)
 			return
 		}

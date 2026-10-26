@@ -3,13 +3,13 @@ package blueprint_relation
 import (
 	"context"
 	"fmt"
-	"github.com/port-labs/terraform-provider-port-labs/v2/internal/consts"
+	"net/http"
 	"strings"
 
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/types"
-	"github.com/hashicorp/terraform-plugin-log/tflog"
+	"github.com/port-labs/terraform-provider-port-labs/v2/internal/adoption"
 	"github.com/port-labs/terraform-provider-port-labs/v2/internal/cli"
 	"github.com/port-labs/terraform-provider-port-labs/v2/internal/flex"
 )
@@ -97,7 +97,7 @@ func (r *BlueprintRelationResource) Read(ctx context.Context, req resource.ReadR
 
 	b, statusCode, err := r.portClient.ReadBlueprint(ctx, state.Blueprint.ValueString())
 	if err != nil {
-		if statusCode == 404 {
+		if statusCode == http.StatusNotFound {
 			resp.State.RemoveResource(ctx)
 			return
 		}
@@ -129,7 +129,7 @@ func (r *BlueprintRelationResource) Create(ctx context.Context, req resource.Cre
 
 	b, statusCode, err := r.portClient.ReadBlueprint(ctx, blueprintIdentifier)
 	if err != nil {
-		if statusCode == 404 {
+		if statusCode == http.StatusNotFound {
 			resp.Diagnostics.AddError("Blueprint doesn't exist, it is required to create a relation", err.Error())
 			return
 		}
@@ -140,12 +140,10 @@ func (r *BlueprintRelationResource) Create(ctx context.Context, req resource.Cre
 	// relations created outside Terraform (e.g. by an integration's default resources) are only
 	// taken over when explicitly allowed
 	if _, ok := b.Relations[relationIdentifier]; ok {
-		if !r.portClient.AdoptExisting(consts.ResourceKindBlueprintRelation, state.AdoptExisting) {
-			existsErr := &cli.ResourceExistsError{ResourceKind: consts.ResourceKindBlueprintRelation, Identifier: relationIdentifier, Blueprint: blueprintIdentifier}
-			resp.Diagnostics.AddError(existsErr.Summary(), existsErr.Error())
+		existing := existingRelation(blueprintIdentifier, relationIdentifier)
+		if !adoption.TakeOver(adoption.AtApply, r.portClient, existing, state.AdoptExisting, nil, &resp.Diagnostics) {
 			return
 		}
-		tflog.Info(ctx, "relation already exists, adopting it into state", map[string]interface{}{"blueprint": blueprintIdentifier, "identifier": relationIdentifier})
 	}
 
 	if _, err := r.portClient.PatchBlueprintRelation(ctx, blueprintIdentifier, relationIdentifier, relationToPortBody(state)); err != nil {
@@ -191,7 +189,7 @@ func (r *BlueprintRelationResource) Delete(ctx context.Context, req resource.Del
 
 	statusCode, err := r.portClient.DeleteBlueprintRelation(ctx, state.Blueprint.ValueString(), state.Identifier.ValueString())
 	if err != nil {
-		if statusCode == 404 {
+		if statusCode == http.StatusNotFound {
 			resp.State.RemoveResource(ctx)
 			return
 		}

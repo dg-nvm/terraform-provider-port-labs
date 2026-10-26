@@ -96,6 +96,11 @@ func TestRelationCreateAdoption(t *testing.T) {
 				return
 			}
 			assert.Empty(t, adopttest.ErrorSummaries(resp.Diagnostics))
+			if tc.relationExists {
+				assert.Equal(t, []string{"relation was taken over"}, adopttest.WarningSummaries(resp.Diagnostics), "taking over during apply is reported")
+			} else {
+				assert.Empty(t, adopttest.WarningSummaries(resp.Diagnostics))
+			}
 			assert.Equal(t, []string{"PATCH /v1/blueprints/_team"}, fake.Writes())
 			assert.Equal(t, "GitLab Group", relation.(map[string]any)["title"])
 		})

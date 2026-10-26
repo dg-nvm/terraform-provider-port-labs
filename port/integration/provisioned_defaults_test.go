@@ -3,7 +3,6 @@ package integration_test
 import (
 	"context"
 	"fmt"
-	"os"
 	"strings"
 	"testing"
 
@@ -98,16 +97,19 @@ func blueprintHasRelation(portClient *cli.PortClient, blueprint, relation string
 // installing the GitLab integration makes Port create the gitlabGroup blueprint and the _team.gitlab_group relation,
 // and declaring them in the same configuration takes them over in one apply instead of failing.
 //
-// Port provisions defaults only for organizations with provisioned defaults enabled, and the resources it creates
-// have fixed identifiers, so this runs only when PORT_ACC_PROVISIONED_DEFAULTS is set.
+// Port provisions defaults only for organizations with provisioned defaults enabled, so it runs only against those.
 func TestAccPortIntegrationProvisionedDefaultsAreTakenOver(t *testing.T) {
 	acctest.SkipUnlessAcceptance(t)
-	if os.Getenv("PORT_ACC_PROVISIONED_DEFAULTS") != "true" {
-		t.Skip("set PORT_ACC_PROVISIONED_DEFAULTS=true to run against an organization with provisioned defaults")
-	}
 	enableIntegrationBetaFeatures(t)
 
 	portClient := acctest.PortClient(t)
+	enabled, err := portClient.HasFeatureFlags(context.Background(), cli.FeatureFlagProvisionedDefaults)
+	if err != nil {
+		t.Fatalf("failed to read organization feature flags: %v", err)
+	}
+	if !enabled {
+		t.Skipf("organization does not have %s, so Port does not provision integration defaults", cli.FeatureFlagProvisionedDefaults)
+	}
 	installationID := utils.GenID()
 	secretName := strings.ReplaceAll(utils.GenID(), "-", "_")
 	t.Cleanup(func() { cleanupGitlabProvisionedDefaults(t, portClient, installationID, secretName) })

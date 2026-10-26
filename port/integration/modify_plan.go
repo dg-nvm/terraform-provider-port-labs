@@ -99,22 +99,9 @@ func (r *IntegrationResource) ModifyPlan(ctx context.Context, req resource.Modif
 	if plan.Config.IsNull() || plan.Config.IsUnknown() {
 		plan.Config = state.Config
 	}
-	keepUnconfiguredChangelogDestinations(&plan, &config, &state)
 
 	r.validateSpecAtPlan(ctx, &plan, specConfiguredInHCL, &resp.Diagnostics)
 	resp.Diagnostics.Append(resp.Plan.Set(ctx, &plan)...)
-}
-
-// keepUnconfiguredChangelogDestinations keeps the changelog destinations recorded in state when the configuration
-// does not declare them. The framework marks unset computed attributes unknown whenever anything else differs
-// from state (e.g. Port's additions to spec), which would otherwise show them as changing on every plan.
-func keepUnconfiguredChangelogDestinations(plan, config, state *IntegrationModel) {
-	if config.KafkaChangelogDestination.IsNull() && plan.KafkaChangelogDestination.IsUnknown() {
-		plan.KafkaChangelogDestination = state.KafkaChangelogDestination
-	}
-	if config.WebhookChangelogDestination.IsNull() && plan.WebhookChangelogDestination.IsUnknown() {
-		plan.WebhookChangelogDestination = state.WebhookChangelogDestination
-	}
 }
 
 // planSpec overlays the spec sections the configuration declares onto the ones

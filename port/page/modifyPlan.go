@@ -2,13 +2,14 @@ package page
 
 import (
 	"context"
-	"fmt"
-	"github.com/port-labs/terraform-provider-port-labs/v2/internal/cli"
-	"github.com/port-labs/terraform-provider-port-labs/v2/internal/consts"
+	"net/http"
 
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/types"
+	"github.com/port-labs/terraform-provider-port-labs/v2/internal/adoption"
+	"github.com/port-labs/terraform-provider-port-labs/v2/internal/cli"
+	"github.com/port-labs/terraform-provider-port-labs/v2/internal/consts"
 )
 
 var _ resource.ResourceWithModifyPlan = &PageResource{}
@@ -25,23 +26,37 @@ func (r *PageResource) ModifyPlan(ctx context.Context, req resource.ModifyPlanRe
 	resp.Diagnostics.Append(req.Plan.GetAttribute(ctx, path.Root("identifier"), &identifier)...)
 	resp.Diagnostics.Append(req.Plan.GetAttribute(ctx, path.Root("type"), &pageType)...)
 	resp.Diagnostics.Append(req.Plan.GetAttribute(ctx, path.Root("adopt_existing"), &adoptExisting)...)
-	if resp.Diagnostics.HasError() || identifier.IsUnknown() || pageType.ValueString() == "entity" {
+	if resp.Diagnostics.HasError() || identifier.IsUnknown() || pageType.ValueString() == entityPageType {
 		return
 	}
 
-	_, statusCode, err := r.portClient.GetPage(ctx, identifier.ValueString())
+	existing, statusCode, err := r.portClient.GetPage(ctx, identifier.ValueString())
 	if err != nil {
-		if statusCode != 404 {
+		if statusCode != http.StatusNotFound {
 			resp.Diagnostics.AddWarning("failed to check whether the page already exists", err.Error())
 		}
 		return
 	}
 
-	if r.portClient.AdoptExisting(consts.ResourceKindPage, adoptExisting) {
-		resp.Diagnostics.AddAttributeWarning(path.Root("adopt_existing"), "page will be taken over",
-			fmt.Sprintf("Page %q already exists in Port. Applying will take ownership of it and overwrite it to match the configuration.", identifier.ValueString()))
-		return
+	adoption.TakeOver(adoption.AtPlan, r.portClient, existingPage(identifier.ValueString()), adoptExisting,
+		pageTypeConflict(identifier.ValueString(), existing.Type, pageType.ValueString()), &resp.Diagnostics)
+}
+
+func existingPage(identifier string) *cli.ResourceExistsError {
+	return &cli.ResourceExistsError{ResourceKind: consts.ResourceKindPage, Identifier: identifier}
+}
+
+// pageTypeConflict reports a page that cannot be taken over because its type differs from the configuration, as
+// a page's type cannot be changed
+func pageTypeConflict(identifier, existingType, configuredType string) *cli.AdoptionConflictError {
+	if existingType == configuredType {
+		return nil
 	}
-	existsErr := &cli.ResourceExistsError{ResourceKind: consts.ResourceKindPage, Identifier: identifier.ValueString()}
-	resp.Diagnostics.AddAttributeError(path.Root("identifier"), existsErr.Summary(), existsErr.Error())
+	return &cli.AdoptionConflictError{
+		ResourceKind: consts.ResourceKindPage,
+		Identifier:   identifier,
+		Field:        "type",
+		Existing:     existingType,
+		Configured:   configuredType,
+	}
 }

@@ -4,13 +4,16 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 	"time"
 
+	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-log/tflog"
+	"github.com/port-labs/terraform-provider-port-labs/v2/internal/adoption"
 	"github.com/port-labs/terraform-provider-port-labs/v2/internal/cli"
 	"github.com/port-labs/terraform-provider-port-labs/v2/internal/consts"
 	"github.com/port-labs/terraform-provider-port-labs/v2/internal/flex"
@@ -50,7 +53,7 @@ func (r *BlueprintResource) Read(ctx context.Context, req resource.ReadRequest, 
 
 	b, statusCode, err := r.portClient.ReadBlueprint(ctx, state.Identifier.ValueString())
 	if err != nil {
-		if statusCode == 404 {
+		if statusCode == http.StatusNotFound {
 			resp.State.RemoveResource(ctx)
 			return
 		}
@@ -161,14 +164,8 @@ func (r *BlueprintResource) Create(ctx context.Context, req resource.CreateReque
 		return
 	}
 
-	bp, err := r.createOrAdoptBlueprint(ctx, b, createCatalogPage, r.portClient.AdoptExisting(consts.ResourceKindBlueprint, state.AdoptExisting))
-	var existsErr *cli.ResourceExistsError
-	if errors.As(err, &existsErr) {
-		resp.Diagnostics.AddError(existsErr.Summary(), existsErr.Error())
-		return
-	}
-	if err != nil {
-		resp.Diagnostics.AddError("failed to create blueprint", err.Error())
+	bp := r.createOrTakeOverBlueprint(ctx, b, createCatalogPage, state.AdoptExisting, &resp.Diagnostics)
+	if resp.Diagnostics.HasError() {
 		return
 	}
 
@@ -178,26 +175,52 @@ func (r *BlueprintResource) Create(ctx context.Context, req resource.CreateReque
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 }
 
-// createOrAdoptBlueprint creates the blueprint. When it was already created outside Terraform (e.g. by an
-// integration's default resources), it fails unless adoptExisting is set, in which case it takes ownership.
-// Relations and aggregation properties on the existing blueprint are kept, since they may be managed by
-// other resources.
-func (r *BlueprintResource) createOrAdoptBlueprint(ctx context.Context, b *cli.Blueprint, createCatalogPage *bool, adoptExisting bool) (*cli.Blueprint, error) {
+// createOrTakeOverBlueprint creates the blueprint. When it was already created outside Terraform (e.g. by an
+// integration's default resources), including concurrently with this create, it takes ownership of it only when
+// allowed, and reports the outcome in diags.
+func (r *BlueprintResource) createOrTakeOverBlueprint(ctx context.Context, b *cli.Blueprint, createCatalogPage *bool, adoptExisting types.Bool, diags *diag.Diagnostics) *cli.Blueprint {
 	existingBp, statusCode, err := r.portClient.ReadBlueprint(ctx, b.Identifier)
-	if err != nil {
-		if statusCode == 404 {
-			return r.portClient.CreateBlueprint(ctx, b, createCatalogPage)
-		}
-		return nil, err
+	if err == nil {
+		return r.takeOverBlueprint(ctx, b, existingBp, adoptExisting, diags)
 	}
-	if !adoptExisting {
-		return nil, &cli.ResourceExistsError{ResourceKind: consts.ResourceKindBlueprint, Identifier: b.Identifier}
+	if statusCode != http.StatusNotFound {
+		diags.AddError("failed to create blueprint", err.Error())
+		return nil
 	}
 
-	tflog.Info(ctx, "blueprint already exists, adopting it into state", map[string]interface{}{"identifier": b.Identifier})
+	bp, err := r.portClient.CreateBlueprint(ctx, b, createCatalogPage)
+	var takenErr *cli.IdentifierTakenError
+	if errors.As(err, &takenErr) {
+		existingBp, _, err = r.portClient.ReadBlueprint(ctx, b.Identifier)
+		if err != nil {
+			diags.AddError("failed to create blueprint", err.Error())
+			return nil
+		}
+		return r.takeOverBlueprint(ctx, b, existingBp, adoptExisting, diags)
+	}
+	if err != nil {
+		diags.AddError("failed to create blueprint", err.Error())
+		return nil
+	}
+	return bp
+}
+
+// takeOverBlueprint takes ownership of a blueprint that already exists when allowed. Relations and aggregation
+// properties on the existing blueprint are kept, since they may be managed by other resources.
+func (r *BlueprintResource) takeOverBlueprint(ctx context.Context, b *cli.Blueprint, existingBp *cli.Blueprint, adoptExisting types.Bool, diags *diag.Diagnostics) *cli.Blueprint {
+	existing := &cli.ResourceExistsError{ResourceKind: consts.ResourceKindBlueprint, Identifier: b.Identifier}
+	if !adoption.TakeOver(adoption.AtApply, r.portClient, existing, adoptExisting, nil, diags) {
+		return nil
+	}
+
 	b.AggregationProperties = existingBp.AggregationProperties
 	b.Relations = mergeUnmanagedRelations(b.Relations, nil, existingBp.Relations)
-	return r.portClient.UpdateBlueprint(ctx, b, b.Identifier)
+	bp, err := r.portClient.UpdateBlueprint(ctx, b, b.Identifier)
+	if err != nil {
+		diags.AddError("failed to take over blueprint", err.Error())
+		return nil
+	}
+	return bp
 }
 
 func writeBlueprintComputedFieldsToState(state *BlueprintModel, bp *cli.Blueprint) {
@@ -247,7 +270,7 @@ func (r *BlueprintResource) Update(ctx context.Context, req resource.UpdateReque
 		var statusCode int
 		existingBp, statusCode, err = r.portClient.ReadBlueprint(ctx, previousState.Identifier.ValueString())
 		if err != nil {
-			if statusCode == 404 {
+			if statusCode == http.StatusNotFound {
 				resp.Diagnostics.AddError("Blueprint doesn't exists, it is required to update the blueprint", err.Error())
 				return
 			}

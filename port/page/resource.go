@@ -3,12 +3,13 @@ package page
 import (
 	"context"
 	"errors"
-	"github.com/port-labs/terraform-provider-port-labs/v2/internal/consts"
+	"net/http"
 
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-log/tflog"
+	"github.com/port-labs/terraform-provider-port-labs/v2/internal/adoption"
 	"github.com/port-labs/terraform-provider-port-labs/v2/internal/cli"
 )
 
@@ -57,7 +58,7 @@ func (r *PageResource) Read(ctx context.Context, req resource.ReadRequest, resp 
 	p, statusCode, err := r.portClient.GetPage(ctx, state.Identifier.ValueString())
 
 	if err != nil {
-		if statusCode == 404 {
+		if statusCode == http.StatusNotFound {
 			resp.State.RemoveResource(ctx)
 			return
 		}
@@ -91,14 +92,14 @@ func (r *PageResource) Delete(ctx context.Context, req resource.DeleteRequest, r
 		return
 	}
 
-	if state.Type.ValueString() == "entity" {
+	if state.Type.ValueString() == entityPageType {
 		tflog.Debug(ctx, "entity page is tied to its blueprint and is not deletable, unregistering from state")
 		resp.State.RemoveResource(ctx)
 		return
 	}
 	statusCode, err := r.portClient.DeletePage(ctx, state.Identifier.ValueString())
 	if err != nil {
-		if statusCode == 404 {
+		if statusCode == http.StatusNotFound {
 			resp.State.RemoveResource(ctx)
 			return
 		}
@@ -119,10 +120,10 @@ func (r *PageResource) Create(ctx context.Context, req resource.CreateRequest, r
 	}
 
 	switch state.Type.ValueString() {
-	case "entity":
+	case entityPageType:
 		_, statusCode, err := r.portClient.GetPage(ctx, state.Identifier.ValueString())
 		if err != nil {
-			if statusCode == 404 {
+			if statusCode == http.StatusNotFound {
 				resp.Diagnostics.AddError(
 					"Unsupported Operation",
 					"Entity pages cannot be created. They are automatically created when a blueprint is created. Import the existing entity page with: terraform import port_page.<resource_name> <identifier>",
@@ -137,18 +138,12 @@ func (r *PageResource) Create(ctx context.Context, req resource.CreateRequest, r
 	default:
 		// the page may have been created outside Terraform, e.g. the catalog page Port creates alongside
 		// a blueprint, and is only taken over when explicitly allowed
-		_, statusCode, err := r.portClient.GetPage(ctx, state.Identifier.ValueString())
+		existing, statusCode, err := r.portClient.GetPage(ctx, state.Identifier.ValueString())
 		if err == nil {
-			if !r.portClient.AdoptExisting(consts.ResourceKindPage, state.AdoptExisting) {
-				existsErr := &cli.ResourceExistsError{ResourceKind: consts.ResourceKindPage, Identifier: state.Identifier.ValueString()}
-				resp.Diagnostics.AddError(existsErr.Summary(), existsErr.Error())
-				return
-			}
-			tflog.Info(ctx, "page already exists, adopting it into state", map[string]interface{}{"identifier": state.Identifier.ValueString()})
-			r.adoptExistingPage(ctx, state, resp)
+			r.takeOverPage(ctx, existing, state, resp)
 			return
 		}
-		if statusCode != 404 {
+		if statusCode != http.StatusNotFound {
 			resp.Diagnostics.AddError("failed to get page", err.Error())
 			return
 		}
@@ -164,13 +159,12 @@ func (r *PageResource) Create(ctx context.Context, req resource.CreateRequest, r
 	var takenErr *cli.IdentifierTakenError
 	if errors.As(err, &takenErr) {
 		// Port creates a blueprint's catalog page asynchronously, so it can appear after the check above
-		if !r.portClient.AdoptExisting(consts.ResourceKindPage, state.AdoptExisting) {
-			existsErr := &cli.ResourceExistsError{ResourceKind: consts.ResourceKindPage, Identifier: state.Identifier.ValueString()}
-			resp.Diagnostics.AddError(existsErr.Summary(), existsErr.Error())
+		existing, _, err := r.portClient.GetPage(ctx, state.Identifier.ValueString())
+		if err != nil {
+			resp.Diagnostics.AddError("failed to get page", err.Error())
 			return
 		}
-		tflog.Info(ctx, "page was created concurrently, adopting it into state", map[string]interface{}{"identifier": state.Identifier.ValueString()})
-		r.adoptExistingPage(ctx, state, resp)
+		r.takeOverPage(ctx, existing, state, resp)
 		return
 	}
 	if err != nil {
@@ -195,6 +189,16 @@ func (r *PageResource) Create(ctx context.Context, req resource.CreateRequest, r
 	state.Description = types.StringPointerValue(p.Description)
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
+}
+
+// takeOverPage takes ownership of a page that appeared in Port during this apply, when allowed
+func (r *PageResource) takeOverPage(ctx context.Context, existing *cli.Page, state *PageModel, resp *resource.CreateResponse) {
+	identifier := state.Identifier.ValueString()
+	conflict := pageTypeConflict(identifier, existing.Type, state.Type.ValueString())
+	if !adoption.TakeOver(adoption.AtApply, r.portClient, existingPage(identifier), state.AdoptExisting, conflict, &resp.Diagnostics) {
+		return
+	}
+	r.adoptExistingPage(ctx, state, resp)
 }
 
 // adoptExistingPage takes ownership of a page that already exists in Port by updating it to match the plan

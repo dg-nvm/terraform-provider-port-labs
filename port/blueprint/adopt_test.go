@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-go/tftypes"
@@ -102,12 +103,13 @@ func TestBlueprintCreateAdoption(t *testing.T) {
 			}
 
 			// Create also records managed relations in private state, which the framework does not let tests
-			// construct, so the write itself is checked through createOrAdoptBlueprint
-			adoptExisting := r.portClient.AdoptExisting(consts.ResourceKindBlueprint, boolValue(tc.adoptExisting))
-			_, err := r.createOrAdoptBlueprint(context.Background(), gitlabGroupBlueprint(nil), nil, adoptExisting)
-			assert.NoError(t, err)
+			// construct, so the write itself is checked through createOrTakeOverBlueprint
+			var diags diag.Diagnostics
+			r.createOrTakeOverBlueprint(context.Background(), gitlabGroupBlueprint(nil), nil, boolValue(tc.adoptExisting), &diags)
+			assert.Empty(t, adopttest.ErrorSummaries(diags))
 
 			if tc.exists {
+				assert.Equal(t, []string{"blueprint was taken over"}, adopttest.WarningSummaries(diags), "taking over during apply is reported")
 				assert.Equal(t, []string{"PUT /v1/blueprints/gitlabGroup"}, fake.Writes())
 				adopted := fake.Blueprint("gitlabGroup")
 				assert.Equal(t, "GitLab Group", adopted["title"])
@@ -127,11 +129,38 @@ func TestBlueprintCreateAdoptionDeclaredRelationWins(t *testing.T) {
 
 	target, title := "gitlabGroup", "Declared parent"
 	declared := gitlabGroupBlueprint(map[string]cli.Relation{"parent": {Target: &target, Title: &title}})
-	_, err := r.createOrAdoptBlueprint(context.Background(), declared, nil, true)
-	assert.NoError(t, err)
+	var diags diag.Diagnostics
+	r.createOrTakeOverBlueprint(context.Background(), declared, nil, types.BoolValue(true), &diags)
+	assert.Empty(t, adopttest.ErrorSummaries(diags))
 
 	parent := fake.Blueprint("gitlabGroup")["relations"].(map[string]any)["parent"].(map[string]any)
 	assert.Equal(t, "Declared parent", parent["title"], "a relation declared in Terraform replaces the existing one")
+}
+
+func TestBlueprintCreateTakesOverBlueprintCreatedConcurrently(t *testing.T) {
+	testCases := []struct {
+		name       string
+		policy     cli.AdoptionPolicy
+		wantError  []string
+		wantWrites []string
+	}{
+		{name: "without opt-in fails", wantError: []string{"blueprint already exists"}, wantWrites: []string{"POST /v1/blueprints"}},
+		{name: "with provider policy is taken over", policy: adopttest.Policy(consts.ResourceKindBlueprint), wantWrites: []string{"POST /v1/blueprints", "PUT /v1/blueprints/gitlabGroup"}},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			fake := adopttest.NewFakePort(t)
+			fake.BlueprintAppearsOnCreate("gitlabGroup", existingIntegrationBlueprint())
+			r := &BlueprintResource{portClient: fake.Client(tc.policy)}
+
+			var diags diag.Diagnostics
+			r.createOrTakeOverBlueprint(context.Background(), gitlabGroupBlueprint(nil), nil, types.BoolNull(), &diags)
+
+			assert.Equal(t, tc.wantError, adopttest.ErrorSummaries(diags))
+			assert.Equal(t, tc.wantWrites, fake.Writes())
+		})
+	}
 }
 
 func gitlabGroupBlueprint(relations map[string]cli.Relation) *cli.Blueprint {
