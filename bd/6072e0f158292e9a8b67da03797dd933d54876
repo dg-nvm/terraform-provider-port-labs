@@ -1,14 +1,15 @@
-port/blueprint/resource.go
-  s_3d4a3ea1412fce::t_c060571c1731ac 131-137
 port/blueprint/updatePropertiesToState.go
   s_3d4a3ea1412fce::t_835208ff0e5eb5 190-214,216,231-232,234-235,237-240,242,247-248,250
+port/blueprint/resource.go
+  s_3d4a3ea1412fce::t_c060571c1731ac 131-137
 port/blueprint/updatePropertiesToState_test.go
-  s_3d4a3ea1412fce::t_3e3f4d1a1a8c9a 1-110
+  s_3d4a3ea1412fce::t_3e3f4d1a1a8c9a 1-24,26-28,30-31,36-39,41-42,45-53,57-65,67-78,81-84,86-91,94-98,100-109
+  s_3d4a3ea1412fce::t_6aaf2174a5957f 25,29,32-35,40,43-44,54-56,66,79-80,85,92-93,99
 ---
 {
   "schema_version": "authorship/3.0.0",
   "git_ai_version": "1.7.5",
-  "base_commit_sha": "44a4478c96d9a0bba6faec66ec94b0670514dd5c",
+  "base_commit_sha": "bd6072e0f158292e9a8b67da03797dd933d54876",
   "prompts": {},
   "sessions": {
     "s_3d4a3ea1412fce": {
@@ -17,7 +18,7 @@ port/blueprint/updatePropertiesToState_test.go
         "id": "sess_9a98895b-3d4b-4db3-a7e7-65e0786bb105",
         "model": "auto"
       },
-      "human_author": "Dawid Goslawski <dawid.goslawski@vonage.com>"
+      "human_author": null
     }
   }
 }
